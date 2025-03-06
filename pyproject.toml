@@ -26,10 +26,10 @@ dependencies = [
 
 [project.optional-dependencies]
 test = [
+    "ruff==0.9.5",
 ]
 dev = [
-    "pilgirm[test]",
-    "ruff==0.9.5",
+    "pilgrim[test]",
     "pandas-stubs>=2.0.0"
 ]
 
@@ -41,7 +41,7 @@ asyncio_default_fixture_loop_scope = "function"
 [tool.coverage.run]
 omit = [
     # omit generated code
-    "src/pilgirm/_version.py",
+    "src/pilgrim/_version.py",
 ]
 
 [tool.setuptools_scm]
