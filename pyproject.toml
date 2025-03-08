@@ -69,6 +69,8 @@ package-dir = {"" = "src"}
 
 [[tool.mypy.overrides]]
 module = [
+    "langchain_core.*",
+    "langchain.*",
+    "langgraph.*"
 ]
-
 ignore_missing_imports = true
