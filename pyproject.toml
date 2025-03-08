@@ -71,6 +71,7 @@ package-dir = {"" = "src"}
 module = [
     "langchain_core.*",
     "langchain.*",
-    "langgraph.*"
+    "langgraph.*",
+    "langchain_community.*"
 ]
 ignore_missing_imports = true
