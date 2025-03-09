@@ -18,10 +18,11 @@ DB_URI=sqlite:///path/to/your/database.db
 OPENAI_API_KEY=your_openai_api_key
 ```
 
-It's best to try this out first in a jupyter notebook. This is a baseline model that can answer questions about a database.
+It's best to try this out first in a jupyter notebook. This is a baseline model that can answer questions about a database, and it includes an explanation node that explains the agent's actions when tools are used.
 
 ```python
 from IPython.display import Image, display
+import os
 
 import gradio as gr
 from dotenv import load_dotenv
@@ -29,7 +30,7 @@ from langchain_community.utilities.sql_database import SQLDatabase
 from langchain_core.messages import HumanMessage, AIMessage, ToolMessage
 from langchain_openai import ChatOpenAI
 
-from pilgrim.graphs import baseline_graph
+from pilgrim.graphs import baseline_graph_with_explainer
 from pilgrim.utils import draw_mermaid_diagram
 
 load_dotenv()
@@ -38,7 +39,11 @@ load_dotenv()
 llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
 db = SQLDatabase.from_uri(os.environ["DB_URI"])
 
-graph = baseline_graph(llm, db)
+graph = baseline_graph_with_explainer(
+    db=db,
+    llm=llm,
+    explain_llm=llm
+).compile()
 
 display(Image(draw_mermaid_diagram(graph)))
 
