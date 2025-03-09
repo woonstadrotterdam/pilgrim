@@ -1,27 +1,23 @@
+from typing import Literal
 from langchain_community.agent_toolkits.sql.toolkit import SQLDatabaseToolkit
 from langchain_community.utilities.sql_database import SQLDatabase
 from langchain_core.language_models.chat_models import BaseChatModel
 from langgraph.graph import MessagesState, StateGraph
-from langgraph.graph.state import CompiledStateGraph
 from langgraph.prebuilt import ToolNode, tools_condition
 
-from pilgrim.nodes.node_factory import create_llm_tool_node
+from pilgrim.nodes.node_factory import create_llm_tool_node, create_llm_node
 
 
-def baseline_graph(db: SQLDatabase, llm: BaseChatModel) -> CompiledStateGraph:
+def _create_baseline_base_graph(db: SQLDatabase, llm: BaseChatModel) -> StateGraph:
     """
-    A langgraph graph that uses a LLM to interact with a SQL database using the following tools in a ReAct agent architecture:
-    - sql_db_list_tables
-    - sql_db_schema
-    - sql_db_query_checker
-    - sql_db_query
+    Creates the base components for a SQL database ReAct agent.
 
     Args:
         db (SQLDatabase): The database to interact with
         llm (BaseChatModel): The LLM to use
 
     Returns:
-        CompiledStateGraph: The compiled graph
+        StateGraph: The initialized graph with basic nodes
     """
     # Create SQL toolkit
     toolkit = SQLDatabaseToolkit(db=db, llm=llm)
@@ -34,15 +30,17 @@ def baseline_graph(db: SQLDatabase, llm: BaseChatModel) -> CompiledStateGraph:
     query_checker_tool = tool_dict["sql_db_query_checker"]
     execute_query_tool = tool_dict["sql_db_query"]
 
+    tools_list = [
+        list_tables_tool,
+        get_schema_tool,
+        query_checker_tool,
+        execute_query_tool,
+    ]
+
     # create custom tool nodes
     llm_query_tool_node = create_llm_tool_node(
         llm=llm,
-        tools=[
-            list_tables_tool,
-            get_schema_tool,
-            query_checker_tool,
-            execute_query_tool,
-        ],
+        tools=tools_list,
         # source: langchain-ai/sql-agent-system-prompt
         system_message_content="""
             You are an agent designed to interact with a SQL database.
@@ -62,24 +60,95 @@ def baseline_graph(db: SQLDatabase, llm: BaseChatModel) -> CompiledStateGraph:
         """,
     )
 
-    # add nodes
+    # Initialize graph builder
     graph_builder = StateGraph(MessagesState)
-    graph_builder.add_node("llm_with_sql_tools", llm_query_tool_node)
-    graph_builder.add_node(
-        "tools",
-        ToolNode(
-            [list_tables_tool, get_schema_tool, query_checker_tool, execute_query_tool]
-        ),
-    )
 
-    # set entry point
+    # Add base nodes
+    graph_builder.add_node("llm_with_sql_tools", llm_query_tool_node)
+    graph_builder.add_node("tools", ToolNode(tools_list))
+
+    # Set entry point
     graph_builder.set_entry_point("llm_with_sql_tools")
 
-    # add edges
+    return graph_builder
+
+
+def baseline_graph(db: SQLDatabase, llm: BaseChatModel) -> StateGraph:
+    """
+    A langgraph graph that uses a LLM to interact with a SQL database using tools in a ReAct agent architecture.
+    This version does not include an explanation node.
+
+    Args:
+        db (SQLDatabase): The database to interact with
+        llm (BaseChatModel): The LLM to use
+
+    Returns:
+        StateGraph: The graph
+    """
+    graph_builder = _create_baseline_base_graph(db, llm)
+
+    # Add edges
     graph_builder.add_conditional_edges("llm_with_sql_tools", tools_condition)
     graph_builder.add_edge("tools", "llm_with_sql_tools")
 
-    # compile graph
-    graph = graph_builder.compile()
+    return graph_builder
 
-    return graph
+
+def baseline_graph_with_explainer(
+    db: SQLDatabase, llm: BaseChatModel, explain_llm: BaseChatModel | None = None
+) -> StateGraph:
+    """
+    A langgraph graph that uses a LLM to interact with a SQL database using tools in a ReAct agent architecture.
+    This version includes an explanation node that always explains the agent's actions when tools are used.
+
+    Args:
+        db (SQLDatabase): The database to interact with
+        llm (BaseChatModel): The LLM to use to answer the user's question
+        explain_llm (BaseChatModel | None): The LLM to use for explaining the agent's actions. If None, the same LLM will be used.
+
+    Returns:
+        StateGraph: The graph
+    """
+    if not explain_llm:
+        explain_llm = llm
+
+    graph_builder = _create_baseline_base_graph(db, llm)
+
+    # Create explaining LLM node
+    explaining_llm_node = create_llm_node(
+        llm=explain_llm,
+        system_message_content="""
+            Your task is to explain to the user which steps the agent took to answer the user's last question if tools were used.
+            Start with the question and the answer.
+            You should explain the steps in a way that is easy to understand, if tools were used.
+            You should show every query that was executed.
+            You should explain the results of the query and the answer if tools were used.
+
+            Always reiterate the answer to the user's question.
+        """,
+    )
+
+    # Add explanation node
+    graph_builder.add_node("explaining_llm", explaining_llm_node)
+
+    # Create custom router function
+    def custom_router(state: MessagesState) -> Literal["tools", "explaining_llm"]:
+        result = tools_condition(state)
+        if result == "tools":
+            return "tools"
+        else:
+            # For any other result (including "__end__"), route to explaining_llm
+            return "explaining_llm"
+
+    # Add conditional edges
+    graph_builder.add_conditional_edges(
+        "llm_with_sql_tools",
+        custom_router,
+        {"tools": "tools", "explaining_llm": "explaining_llm"},
+    )
+
+    # Add remaining edges
+    graph_builder.add_edge("tools", "llm_with_sql_tools")
+    graph_builder.add_edge("explaining_llm", "__end__")
+
+    return graph_builder
